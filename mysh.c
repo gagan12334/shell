@@ -1,17 +1,13 @@
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 #include <unistd.h>
-#include <sys/types.h>
-#include <sys/wait.h>
 #include <fcntl.h>
 #include <errno.h>
-#include <ctype.h>
-#include <sys/stat.h>
-#include <stdbool.h>
 
 #define MAX_ARGS 1000
 // All the tokens we care about: [|,>,<,and, or, {any file/command name}]
+
 typedef struct {
   char *argv[MAX_ARGS]; // argument list
   char *input_file;
@@ -26,53 +22,99 @@ typedef struct {
   int tokenCount;
 } TokenArray;
 
-TokenArray tokenizer(char* line);
+TokenArray* tokenizer(char* line);
 void parser();
 void processAndPipe();
+char* nextLine();		// maybe?
 
-int main(int argc, char* argv){
+
+int main(int argc, char** argv){
+
   int isInter = isatty(STDIN_FILENO);
   //Check between interactive mode and batch mode using isatty()
   if(isInter){
-    printf("Welcome to mysh\n");
-    while(1){
+
+    printf("--Welcome to mysh--\n");
+		
+		char* line = NULL;
+			
+		int fd = open(STDIN_FILENO, O_RDONLY);
+		if(fd == -1){
+			perror("unable to open");
+		}
+
+    while(line == nextLine()){
       printf("mysh> ");
-      char* line = NULL;
-      if(fgets(line, 1024, stdin) == NULL){
-        perror("Error reading Line");
-        exit(1);
-      }
-      TokenArray tokens = tokenizer(line);
-      parser(tokens.tokens, tokens.tokenCount);
+			TokenArray* tokens = tokenizer(line);
+			parser(tokens->tokens, tokens->tokenCount);
 
+			free(line);
+			free(tokens->tokens);
+			free(tokens);
     }
-    printf("Bye\n");
-    return 0;
+		 
+    printf("--Bye--\n");
   }
-  else{
+	else{
     printf("Batch mode\n");
-    //We open a file and then assuming that each line is a command we would run a tokenizer on it
+    //We open a file and then assuming that each line is a command we would run the tokenizer on it
 
-    int fd;
-    if((fd = open(argv[1], O_RDONLY) == -1)){
-      perror("eorror");
+    int fd = open(argv[1], O_RDONLY);
+    if(fd == -1){
+      perror("unable to open");
     }
 
+		char* line = NULL;
+		while ((line == nextLine())){
+      TokenArray* tokens = tokenizer(line);
+      parser(tokens->tokens, tokens->tokenCount);
+
+      free(line);
+      free(tokens->tokens);
+      free(tokens);
+		}
   }
-  
+
+	return EXIT_SUCCESS;
 }
 
 
-TokenArray tokenizer(char* line) {
-  // read through line
-  // break it into indivudal tokens
-  // store them in a list
+TokenArray* tokenizer(char* line) {
   
-  char* currentToken;
-  TokenArray tokens;
+  TokenArray* tokens = (TokenArray*)malloc(sizeof(TokenArray));
+  char** tokenArr = (char**)malloc(sizeof(char*));
+
+  int count = 0;
+  char* currentTok = strtok(line, " ");
+
+  bool foundComment = false;
+  while(currentTok != NULL){
+
+
+    for (int i = 0; i < strlen(currentTok); i++){           // looks for comment within token
+        if (currentTok[i] == '#'){
+            currentTok[i] = '\0';                           // if comment found, places null terminator at the beginning of the comment to cut off the token
+            foundComment = true;
+        }
+    }
+
+    if (strlen(currentTok) != 0){
+        tokenArr[count] = currentTok;                           // add token to array
+        count++;
+    }
+
+    if (foundComment){                                      // if comment found, break out and stop reading the line
+        break;
+    }
+
+    tokenArr = (char**)realloc(tokenArr, (count + 1) * sizeof(char*));
+  	currentTok = strtok(NULL, " ");
+  }
   
+  tokens->tokenCount = count;
+  tokens->tokens = tokenArr;
   
-  return tokens;
+	return tokens;
 }
 
 void parser(char** tokens, int tokenCount) {
@@ -244,3 +286,6 @@ void processAndPipe(char* cmd1, char* cmd2) {
   }
 }
 
+char* nextLine(){
+	char* line = NULL;
+}
