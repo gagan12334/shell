@@ -33,7 +33,7 @@ int main(int argc, char** argv){
 
   int isInter = isatty(STDIN_FILENO);
   //Check between interactive mode and batch mode using isatty()
-  if(isInter){
+  if(isInter && argc == 1){
 
     printf("--Welcome to mysh--\n");
 		
