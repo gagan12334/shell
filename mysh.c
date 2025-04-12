@@ -7,6 +7,7 @@
 #include <errno.h>
 
 #define MAX_ARGS 1000
+#define BUFLEN 64
 // All the tokens we care about: [|,>,<,and, or, {any file/command name}]
 
 typedef struct {
@@ -26,7 +27,14 @@ typedef struct {
 TokenArray* tokenizer(char* line);
 void parser();
 void processAndPipe();
-char* nextLine();		// maybe?
+
+void readTokens(TokenArray* tokens);
+
+char* nextLine();		    
+int currentFD = 0;      // variables for reading lines in both shell and batch mode
+int currentPos = 0;
+int currentLen = 0;
+char buffer[BUFLEN];
 
 
 int main(int argc, char** argv){
@@ -38,42 +46,46 @@ int main(int argc, char** argv){
     printf("--Welcome to mysh--\n");
 		
 		char* line = NULL;
-			
-		int fd = open(STDIN_FILENO, O_RDONLY);
-		if(fd == -1){
-			perror("unable to open");
-		}
+		currentFD = STDIN_FILENO;
 
-    while(line == nextLine()){
-      printf("mysh> ");
+    printf("mysh> ");
+    fflush(stdout);
+    while((line = nextLine())){
+
 			TokenArray* tokens = tokenizer(line);
-			parser(tokens->tokens, tokens->tokenCount);
+      // readTokens(tokens);
+			// parser(tokens->tokens, tokens->tokenCount);
 
 			free(line);
 			free(tokens->tokens);
 			free(tokens);
+      
+      printf("mysh> ");
+      fflush(stdout);
     }
 		 
     printf("--Bye--\n");
   }
 	else{
-    printf("Batch mode\n");
     //We open a file and then assuming that each line is a command we would run the tokenizer on it
 
-    int fd = open(argv[1], O_RDONLY);
-    if(fd == -1){
+    currentFD = open(argv[1], O_RDONLY);
+    if(currentFD == -1){
       perror("unable to open");
     }
 
 		char* line = NULL;
-		while ((line == nextLine())){
+		while ((line = nextLine())){
       TokenArray* tokens = tokenizer(line);
-      parser(tokens->tokens, tokens->tokenCount);
+      // readTokens(tokens);
+      // parser(tokens->tokens, tokens->tokenCount);
 
       free(line);
       free(tokens->tokens);
       free(tokens);
 		}
+
+    close(currentFD);
   }
 
 	return EXIT_SUCCESS;
@@ -231,6 +243,7 @@ Split the command into two parts: the command before the pipe (ls) and the comma
   }
   
 }
+
 void processAndPipe(char* cmd1, char* cmd2) {
   /*Use the pipe() system call to create a pipe.
   Use fork() to create two child processes:
@@ -289,4 +302,42 @@ void processAndPipe(char* cmd1, char* cmd2) {
 
 char* nextLine(){
 	char* line = NULL;
+  int lineLen = 0;
+  int segLen, segStart;
+
+  while (1){
+
+    if (currentPos == currentLen){
+      int bytes = read(currentFD, buffer, BUFLEN);
+      if (bytes <= 0){
+        return NULL;
+      }
+      currentLen = bytes;
+      currentPos = 0;
+    }
+
+    segStart = currentPos;
+    for(;currentPos < currentLen; currentPos++){
+      if (buffer[currentPos] == '\n'){
+        segLen = currentPos - segStart;
+        line = realloc(line, lineLen + segLen + 1);
+        memcpy(line + lineLen, buffer + segStart, segLen);
+        line[lineLen + segLen] = '\0';
+        currentPos++;
+        return line;
+      }
+    }
+
+    segLen = currentPos - segStart;
+    line = realloc(line, lineLen + segLen);
+    memcpy(line + lineLen, buffer + segStart, segLen);
+    lineLen += segLen;
+  }
+}
+
+void readTokens(TokenArray* tokens){    // for testing
+  for (int i = 0; i < tokens->tokenCount; i++){
+    printf("%d : %s\n", i, tokens->tokens[i]);
+  }
+  printf("\n");
 }
