@@ -141,7 +141,30 @@ void parser(char** tokens, int tokenCount) {
   /*Parse the command to detect the | token.
 Split the command into two parts: the command before the pipe (ls) and the command after the pipe (grep myfile).*/
   char cwd[1024];
-  for (int i = 0; i < tokenCount-1; i++){
+  int pipeIndex = 0;
+  char* in_file;
+  in_file = NULL;
+  char* out_file = NULL;
+  char* command1 = NULL;
+  char* command2 = NULL;
+
+  for(int i =0; i<tokenCount; i++){
+    if(strcmp(tokens[i], "<") == 0){
+      in_file = tokens[i+1];
+      tokens[i] = NULL;
+    }
+    if(strcmp(tokens[i], "|") == 0){
+      command1 = tokens[i-1];
+      command2 = tokens[i+1];
+      tokens[i] = NULL;
+    }
+    if(strcmp(tokens[i], ">") == 0){
+      out_file = tokens[i+1];
+      tokens[i] = NULL;
+    }
+  }
+
+  for (int i = 0; i < tokenCount; i++){
     if(strcmp(tokens[i],"exit") == 0){
       exit(0);
     }
@@ -186,64 +209,90 @@ Split the command into two parts: the command before the pipe (ls) and the comma
     if(strcmp(tokens[i],"die") == 0){
       exit(1);
     }
-    //Now we check for specific tokens
-    if(strcmp(tokens[i],"|") == 0){
-      //now this means we have a pipe so we should split into 2 commands
-      char* command1;
-      command1 = tokens[i-1];
-      char* command2;
-      command2 = tokens[i+1];
-      //Now we have to check if the command is a built in command
-      if(strcmp(command1,"cd") == 0){
-        //we have to check if the command is a built in command
-        if(chdir(command2) == -1){
-          perror("Error changing the directory");
-          exit(1);
-        }
-      }
-      else if(strcmp(command1,"pwd") == 0){
-        char cwd[1024];
-        if(getcwd(cwd, sizeof(cwd)) == NULL){
-          perror("Error getting path of current directory");
-          exit(1);
-        }
-        printf("%s\n", cwd);
-      }
-      else{
-        processAndPipe(command1,command2);
-      }
-    }
-    if(strcmp(tokens[i],">") == 0){
-      //this means we have to redirect the output of the command
-      
-    }
-    if(strcmp(tokens[i],"<") == 0){
-      //this means we have to redirect the input of the command
+    break;
+  }
+
+  // Handle pipes
+  if(pipeIndex != 0){
+    int cmd1_start, cmd2_start;
+    // Find first command (before pipe)
+    cmd1_start = 0;
+    while(cmd1_start < tokenCount && tokens[cmd1_start] == NULL){
+      cmd1_start++;
     }
     
-
-  }
-
-  //check for the last token
-  //in the last token we can't have a pipe
-  if(strcmp(tokens[tokenCount-1],"cd") == 0){
-    perror("Error changing the directory");
-    exit(1);
-  }
-  if(strcmp(tokens[tokenCount-1],"pwd") == 0){
-    char cwd[1024];
-    if(getcwd(cwd, sizeof(cwd)) == NULL){
-      perror("Error getting path of current directory");
-      exit(1);
+    // Find second command (after pipe)
+    cmd2_start = pipeIndex+1;
+    while(cmd2_start < tokenCount && tokens[cmd2_start] == NULL){
+      cmd2_start++;
+    }  
+    if(cmd1_start < pipeIndex && cmd2_start < tokenCount){
+      processAndPipe(&tokens[cmd1_start], &tokens[cmd2_start]);
+    } 
+    else {
+      fprintf(stderr, "Invalid pipe syntax\n");
     }
-    printf("%s\n", cwd);
+    return;
   }
-  if(strcmp(tokens[tokenCount-1],"exit") == 0){
-    exit(1);
-  }
-  
-}
 
+  //Handle regular commands so meaning no pipes:
+  int command_start = 0;
+  while(command_start < tokenCount && tokens[command_start] == NULL){
+    command_start++;
+  }
+
+  if(command_start < tokenCount){
+    pid_t pid;
+    if((pid = fork()) == 0){
+      if(in_file != NULL){
+        int fd = open(in_file, O_RDONLY);
+        if(fd == -1){
+          perror("Error opening input file");
+          exit(1);
+        }
+        dup2(fd, STDIN_FILENO);
+        close(fd);
+      }
+      if(out_file != NULL){
+        int fd = open(out_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if(fd == -1){
+          perror("Error opening output file");
+          exit(1);
+        }
+        dup2(fd, STDOUT_FILENO);
+        close(fd);
+      }
+      char* path = tokens[command_start];
+      if(strchr(path, '/')) { // If it contains a slash, then just do it directly
+        execv(path, &tokens[command_start]);
+      } 
+      else 
+      { // Search these: /usr/local/bin, /usr/bin, /bin
+        char* possiblePaths[] = {"/usr/local/bin/", "/usr/bin/", "/bin/", NULL};
+        char full_path[1024];
+        
+        for(int i=0; possiblePaths[i]; i++){
+          snprintf(full_path, sizeof(full_path), "%s%s", possiblePaths[i], path);
+          if(access(full_path, X_OK) == 0){
+            execv(full_path, &tokens[command_start]);
+          }
+        }
+      }
+      perror("execv failed");
+      exit(1);
+    } 
+    else if(pid > 0){
+      //meaning that we r in the parent process
+      waitpid(pid, NULL, 0);
+    } 
+    else {
+      //something went wrong in the forking process
+      perror("fork");
+    }
+
+  }
+}
+  
 void processAndPipe(char* cmd1, char* cmd2) {
   /*Use the pipe() system call to create a pipe.
   Use fork() to create two child processes:
@@ -253,51 +302,50 @@ void processAndPipe(char* cmd1, char* cmd2) {
   Close the pipe file descriptors in the parent process after setting up the redirection.*/
   int pipefd[2];
   int child1, child2;
-  // pipefd[0] = child1;
-  // pipefd[1] = child2;
+
   if(pipe(pipefd) == -1){
     perror("Error creating pipe");
     exit(1);
   }
+
   if((child1 = fork()) == -1){
     perror("Error forking child process");
     exit(1);
   }
+
   if(child1 == 0){
-    int fd1;
     //this means we r in the actual child process and not the parent one
-    if(cmd1){
-      fd1 = open(cmd1, O_RDONLY);
-      if(fd1 == -1){
-        perror("Error opening file");
-        exit(1);
-      }
-      dup2(fd1, STDIN_FILENO);
-      close(fd1);
-      //now it writes the output of this cmd1 to the pipe
-      write(pipefd[1], cmd1, strlen(cmd1));
-      close(pipefd[1]);
-    }
+    char* args1[] = {cmd1, NULL};
+    close(pipefd[0]); //close the unused read end of the pipe we made
+    dup2(pipefd[1], STDOUT_FILENO);
+    close(pipefd[1]);
+
+    execv(cmd1, args1);
+    perror("Error executing command");
+    exit(1);
   }
-  if(child2 = fork() == -1){
+
+  if((child2 = fork()) == -1){ 
     perror("Error forking child process");
     exit(1);
   }
+
   if(child2 == 0){
-    if(cmd2){
-      int fd2;
-      fd2 = open(cmd2, O_RDONLY);
-      if(fd2 == -1){
-        perror("Error opening file");
-        exit(1);
-      }
-      dup2(fd2, STDIN_FILENO);
-      close(fd2);
-      //now it reads the output of this cmd2 from the pipe
-      read(pipefd[0], cmd2, strlen(cmd2));
-      close(pipefd[0]);
-    }
+    char* args2[] = {cmd2, NULL};
+    close(pipefd[1]); 
+    dup2(pipefd[0], STDIN_FILENO);
+    close(pipefd[0]);
+  
+    execv(cmd2, args2);  
+    perror("Error executing command");
+    exit(1);
   }
+  //The parent process now basically closes both ends of the pipe
+  close(pipefd[0]);
+  close(pipefd[1]);
+  //Wait for both child processes to finish
+  waitpid(child1, NULL, 0);
+  waitpid(child2, NULL, 0);
 }
 
 char* nextLine(){
