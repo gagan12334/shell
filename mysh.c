@@ -10,6 +10,8 @@
 #define BUFLEN 64
 // All the tokens we care about: [|,>,<,and, or, {any file/command name}]
 
+static int last_command_status = 0; // Tracks last command's exit status (0 = success)
+
 typedef struct {
   char *argv[MAX_ARGS]; // argument list
   char *input_file;
@@ -105,19 +107,19 @@ TokenArray* tokenizer(char* line) {
 
 
     for (int i = 0; i < strlen(currentTok); i++){           // looks for comment within token
-        if (currentTok[i] == '#'){
-            currentTok[i] = '\0';                           // if comment found, places null terminator at the beginning of the comment to cut off the token
-            foundComment = true;
-        }
+      if (currentTok[i] == '#'){
+        currentTok[i] = '\0';                           // if comment found, places null terminator at the beginning of the comment to cut off the token
+        foundComment = true;
+      }
     }
 
     if (strlen(currentTok) != 0){
-        tokenArr[count] = currentTok;                           // add token to array
-        count++;
+      tokenArr[count] = currentTok;                           // add token to array
+      count++;
     }
 
     if (foundComment){                                      // if comment found, break out and stop reading the line
-        break;
+      break;
     }
 
     tokenArr = (char**)realloc(tokenArr, (count + 1) * sizeof(char*));
@@ -140,6 +142,9 @@ void parser(char** tokens, int tokenCount) {
   // execute the command
   /*Parse the command to detect the | token.
 Split the command into two parts: the command before the pipe (ls) and the command after the pipe (grep myfile).*/
+  if(tokenCount == 0){
+    return; // No tokens so just stop it there
+  }
   char cwd[1024];
   int pipeIndex = 0;
   char* in_file;
@@ -147,6 +152,18 @@ Split the command into two parts: the command before the pipe (ls) and the comma
   char* out_file = NULL;
   char* command1 = NULL;
   char* command2 = NULL;
+  if(tokenCount > 0 && strcmp(tokens[0], "and") == 0) {
+    if(last_command_status != 0){
+      return;
+    }
+    tokens[0] = NULL; // Remove "and" if executing
+  }
+  else if(tokenCount > 0 && strcmp(tokens[0], "or") == 0) {
+    if(last_command_status == 0){
+      return;
+    } 
+    tokens[0] = NULL; // Remove "or" if executing
+  }
 
   for(int i =0; i<tokenCount; i++){
     if(strcmp(tokens[i], "<") == 0){
@@ -165,49 +182,69 @@ Split the command into two parts: the command before the pipe (ls) and the comma
   }
 
   for (int i = 0; i < tokenCount; i++){
+    if(strcmp(tokens[i],"die") == 0){
+      for(int j = i+1; j < tokenCount; j++) {
+          if(tokens[j]) printf("%s ", tokens[j]);
+      }
+      printf("\n");
+      exit(EXIT_FAILURE);
+    }
     if(strcmp(tokens[i],"exit") == 0){
       exit(0);
     }
     if(strcmp(tokens[i],"cd") == 0){
       if(chdir(tokens[i+1]) == -1){
         perror("Error changing the directory");
+        last_command_status = 1;
+      }
+      else {
+        last_command_status = 0;
       }
       return;
     }
     if(strcmp(tokens[i],"pwd") == 0){
       if(getcwd(cwd, sizeof(cwd)) == NULL){
         perror("Error getting path of current directory");
+        last_command_status = 1;
       }
       else{
         printf("%s\n", cwd);
+        last_command_status = 0;
       }
       return;
     }
     char* command, path, token;
     if(strcmp(tokens[i],"which") == 0){
       if(tokenCount == 2){
+        int found = 0;
+        char* paths[] = {"/usr/local/bin/", "/usr/bin/", "/bin/"}; //allowed paths
         command = tokens[i+1];
         path = getenv("PATH");
         token = strtok(path, ":");
-
-        while(token != NULL){
-          char fullPath[1024];
-          snprintf(fullPath, sizeof(fullPath), "%s/%s", token, command);
-          if(access(fullPath, F_OK) == 0){
-            printf("%s\n", fullPath);
+        for(int j = 0; j < 3; j++) {
+          char theWholePath[1024];
+          snprintf(theWholePath, sizeof(theWholePath), "%s%s", paths[j], command);
+          if(access(theWholePath, X_OK) == 0){
+            printf("%s\n", theWholePath);
+            found = 1;
             break;
           }
-          token = strtok(NULL, ":");
+        }
+        
+        if(!found) {
+          fprintf(stderr, "%s not found\n", command);
+          last_command_status = 1;
+        }
+        if(found) {
+          last_command_status = 0;
         }
       }
       else
       {
         perror("Error: wrong number of arguments");
-        exit(1);
+        last_command_status = 1;
+        return;
       }
-    }
-    if(strcmp(tokens[i],"die") == 0){
-      exit(1);
     }
     break;
   }
@@ -227,10 +264,14 @@ Split the command into two parts: the command before the pipe (ls) and the comma
       cmd2_start++;
     }  
     if(cmd1_start < pipeIndex && cmd2_start < tokenCount){
+      int status;
       processAndPipe(&tokens[cmd1_start], &tokens[cmd2_start]);
+      waitpid(-1, &status, 0);
+      last_command_status = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
     } 
     else {
       fprintf(stderr, "Invalid pipe syntax\n");
+      last_command_status = 1;
     }
     return;
   }
@@ -244,6 +285,10 @@ Split the command into two parts: the command before the pipe (ls) and the comma
   if(command_start < tokenCount){
     pid_t pid;
     if((pid = fork()) == 0){
+      if(!isatty(STDIN_FILENO)) 
+      {  // this checks if we r in batch mode
+        close(STDIN_FILENO);     // Close stdin for child
+      }
       if(in_file != NULL){
         int fd = open(in_file, O_RDONLY);
         if(fd == -1){
@@ -283,11 +328,14 @@ Split the command into two parts: the command before the pipe (ls) and the comma
     } 
     else if(pid > 0){
       //meaning that we r in the parent process
-      waitpid(pid, NULL, 0);
+      int status;
+      waitpid(pid, &status, 0);
+      last_command_status = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
     } 
     else {
       //something went wrong in the forking process
       perror("fork");
+      last_command_status = 1;
     }
 
   }
