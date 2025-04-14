@@ -5,6 +5,9 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <dirent.h>
 
 #define MAX_ARGS 1000
 #define BUFLEN 64
@@ -12,7 +15,9 @@
 
 static int last_command_status = 0; // Tracks last command's exit status (0 = success)
 
-typedef struct {
+char* searchPaths[] = {"/usr/local/bin/", "/usr/bin/", "/bin/"};
+
+typedef struct {    // TODO: remove
   char *argv[MAX_ARGS]; // argument list
   char *input_file;
   char *output_file;
@@ -26,18 +31,20 @@ typedef struct {
   int tokenCount;
 } TokenArray;
 
+bool match(char* entry, char* pattern); 
 TokenArray* tokenizer(char* line);
 void parser();
 void processAndPipe();
+void freeTokenArray(TokenArray* tokens);
 
 void readTokens(TokenArray* tokens);
+
 
 char* nextLine();		    
 int currentFD = 0;      // variables for reading lines in both shell and batch mode
 int currentPos = 0;
 int currentLen = 0;
 char buffer[BUFLEN];
-
 
 int main(int argc, char** argv){
 
@@ -56,11 +63,10 @@ int main(int argc, char** argv){
 
 			TokenArray* tokens = tokenizer(line);
       // readTokens(tokens);
-			// parser(tokens->tokens, tokens->tokenCount);
+			parser(tokens->tokens, tokens->tokenCount);
 
 			free(line);
-			free(tokens->tokens);
-			free(tokens);
+      freeTokenArray(tokens);
       
       printf("mysh> ");
       fflush(stdout);
@@ -71,20 +77,25 @@ int main(int argc, char** argv){
 	else{
     //We open a file and then assuming that each line is a command we would run the tokenizer on it
 
-    currentFD = open(argv[1], O_RDONLY);
-    if(currentFD == -1){
-      perror("unable to open");
+    if (argc == 1){
+      currentFD = STDIN_FILENO;
+    }
+    else{
+      currentFD = open(argv[1], O_RDONLY);
+        
+      if(currentFD == -1){
+        perror("unable to open");
+      }
     }
 
 		char* line = NULL;
 		while ((line = nextLine())){
       TokenArray* tokens = tokenizer(line);
       // readTokens(tokens);
-      // parser(tokens->tokens, tokens->tokenCount);
+      parser(tokens->tokens, tokens->tokenCount);
 
       free(line);
-      free(tokens->tokens);
-      free(tokens);
+      freeTokenArray(tokens);
 		}
 
     close(currentFD);
@@ -93,6 +104,28 @@ int main(int argc, char** argv){
 	return EXIT_SUCCESS;
 }
 
+bool match(char* entry, char* pattern){
+  char* wildCardLocation = strchr(pattern, '*');
+
+  int firstSegLength = wildCardLocation - pattern;              // first segment is from the beginning of the string to before the *
+  int secondSegLength = strlen(wildCardLocation + 1);           // second segment is from after the * to the end
+  int entryLength = strlen(entry);
+
+  if (entryLength < firstSegLength + secondSegLength){
+    return false;
+  }
+
+  bool firstMatch = strncmp(entry, pattern, firstSegLength);      // check if match
+  bool secondMatch = strcmp(entry + entryLength - secondSegLength, pattern + firstSegLength + 1);
+
+  // printf("First: %s | %d\n", entry, firstSegLength);
+  // printf("Second: %s | %s\n", entry + entryLength - secondSegLength, pattern + firstSegLength + 1);
+  // printf("FirstM: %d\n", firstMatch);
+  // printf("SecondM: %d\n", secondMatch);
+  // printf("\n");
+
+  return firstMatch == 0 && secondMatch == 0;
+}
 
 TokenArray* tokenizer(char* line) {
   
@@ -105,27 +138,60 @@ TokenArray* tokenizer(char* line) {
   bool foundComment = false;
   while(currentTok != NULL){
 
-
-    for (int i = 0; i < strlen(currentTok); i++){           // looks for comment within token
-      if (currentTok[i] == '#'){
-        currentTok[i] = '\0';                           // if comment found, places null terminator at the beginning of the comment to cut off the token
-        foundComment = true;
-      }
+    char* commentStart = strchr(currentTok, '#');           // looks for comment within token
+    if (commentStart != NULL){
+      *commentStart = '\0';                                 // if comment found, places null terminator at the beginning of the comment to cut off the token
+      foundComment = true;
     }
 
-    if (strlen(currentTok) != 0){
-      tokenArr[count] = currentTok;                           // add token to array
-      count++;
+
+
+    if (strlen(currentTok) != 0) {
+
+      if (strchr(currentTok, '*')){                     // wildcard expansion
+
+        char* searchpath = strrchr(currentTok, '/');
+        if(searchpath == NULL){
+          searchpath = ".";
+        }
+
+        DIR* dir = opendir(searchpath);
+        struct dirent* entry;
+        while ((entry = readdir(dir)) != NULL) {
+          if (entry->d_name[0] == '.'){
+            continue;
+          }
+
+          if (match(entry->d_name, currentTok)){
+
+            tokenArr[count] = malloc(strlen(entry->d_name) + 1);
+            strcpy(tokenArr[count], entry->d_name);
+            count++;
+            tokenArr = (char**)realloc(tokenArr, (count + 1) * sizeof(char*));
+          }
+
+        }
+        closedir(dir);
+      }
+      else {
+        tokenArr[count] = malloc(strlen(currentTok) + 1);
+        strcpy(tokenArr[count], currentTok);                           // add token to array
+        count++;
+        tokenArr = (char**)realloc(tokenArr, (count + 1) * sizeof(char*));
+      }
+
     }
 
     if (foundComment){                                      // if comment found, break out and stop reading the line
       break;
     }
 
-    tokenArr = (char**)realloc(tokenArr, (count + 1) * sizeof(char*));
   	currentTok = strtok(NULL, " ");
   }
   
+  tokenArr = (char**)realloc(tokenArr, (count + 1) * sizeof(char*));    // add null terminator at the end of tokenArr
+  tokenArr[count] = NULL;
+
   tokens->tokenCount = count;
   tokens->tokens = tokenArr;
   
@@ -140,19 +206,22 @@ void parser(char** tokens, int tokenCount) {
   // check for foreground processes
   // check for other commands
   // execute the command
-  /*Parse the command to detect the | token.
-Split the command into two parts: the command before the pipe (ls) and the command after the pipe (grep myfile).*/
+  // Parse the command to detect the | token
+  // Split the command into two parts: the command before the pipe and the command after the pipe
+
   if(tokenCount == 0){
     return; // No tokens so just stop it there
   }
+
   char cwd[1024];
   int pipeIndex = 0;
-  char* in_file;
-  in_file = NULL;
+  char* in_file = NULL;
   char* out_file = NULL;
   char* command1 = NULL;
   char* command2 = NULL;
-  if(tokenCount > 0 && strcmp(tokens[0], "and") == 0) {
+
+  // conditionals
+  if(tokenCount > 0 && strcmp(tokens[0], "and") == 0) {       
     if(last_command_status != 0){
       return;
     }
@@ -165,23 +234,26 @@ Split the command into two parts: the command before the pipe (ls) and the comma
     tokens[0] = NULL; // Remove "or" if executing
   }
 
-  for(int i =0; i<tokenCount; i++){
+  // piping and redirection setup
+  for(int i = 0; i < tokenCount; i++){
     if(strcmp(tokens[i], "<") == 0){
       in_file = tokens[i+1];
       tokens[i] = NULL;
     }
-    if(strcmp(tokens[i], "|") == 0){
-      command1 = tokens[i-1];
+    else if(strcmp(tokens[i], "|") == 0){
+      command1 = tokens[i-1];   // TODO: i = 0?
       command2 = tokens[i+1];
       tokens[i] = NULL;
     }
-    if(strcmp(tokens[i], ">") == 0){
+    else if(strcmp(tokens[i], ">") == 0){
       out_file = tokens[i+1];
       tokens[i] = NULL;
     }
   }
 
   for (int i = 0; i < tokenCount; i++){
+
+    // die, exit, cd, pwd, which
     if(strcmp(tokens[i],"die") == 0){
       for(int j = i+1; j < tokenCount; j++) {
           if(tokens[j]) printf("%s ", tokens[j]);
@@ -190,7 +262,7 @@ Split the command into two parts: the command before the pipe (ls) and the comma
       exit(EXIT_FAILURE);
     }
     if(strcmp(tokens[i],"exit") == 0){
-      exit(0);
+      exit(EXIT_SUCCESS);
     }
     if(strcmp(tokens[i],"cd") == 0){
       if(chdir(tokens[i+1]) == -1){
@@ -213,17 +285,16 @@ Split the command into two parts: the command before the pipe (ls) and the comma
       }
       return;
     }
-    char* command, path, token;
+    char *command, *path, *token;
     if(strcmp(tokens[i],"which") == 0){
       if(tokenCount == 2){
         int found = 0;
-        char* paths[] = {"/usr/local/bin/", "/usr/bin/", "/bin/"}; //allowed paths
         command = tokens[i+1];
         path = getenv("PATH");
         token = strtok(path, ":");
         for(int j = 0; j < 3; j++) {
           char theWholePath[1024];
-          snprintf(theWholePath, sizeof(theWholePath), "%s%s", paths[j], command);
+          snprintf(theWholePath, sizeof(theWholePath), "%s%s", searchPaths[j], command);
           if(access(theWholePath, X_OK) == 0){
             printf("%s\n", theWholePath);
             found = 1;
@@ -273,10 +344,11 @@ Split the command into two parts: the command before the pipe (ls) and the comma
       fprintf(stderr, "Invalid pipe syntax\n");
       last_command_status = 1;
     }
+
     return;
   }
 
-  //Handle regular commands so meaning no pipes:
+  //Handle regular commands so meaning no pipes
   int command_start = 0;
   while(command_start < tokenCount && tokens[command_start] == NULL){
     command_start++;
@@ -285,10 +357,11 @@ Split the command into two parts: the command before the pipe (ls) and the comma
   if(command_start < tokenCount){
     pid_t pid;
     if((pid = fork()) == 0){
-      if(!isatty(STDIN_FILENO)) 
-      {  // this checks if we r in batch mode
-        close(STDIN_FILENO);     // Close stdin for child
+
+      if(!isatty(STDIN_FILENO)) { // this checks if we are in batch mode
+        close(STDIN_FILENO);
       }
+
       if(in_file != NULL){
         int fd = open(in_file, O_RDONLY);
         if(fd == -1){
@@ -298,6 +371,7 @@ Split the command into two parts: the command before the pipe (ls) and the comma
         dup2(fd, STDIN_FILENO);
         close(fd);
       }
+
       if(out_file != NULL){
         int fd = open(out_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if(fd == -1){
@@ -307,27 +381,30 @@ Split the command into two parts: the command before the pipe (ls) and the comma
         dup2(fd, STDOUT_FILENO);
         close(fd);
       }
+
       char* path = tokens[command_start];
       if(strchr(path, '/')) { // If it contains a slash, then just do it directly
+        // printf("Path: %s Args: %s Command_Start: %d\n", path, tokens[command_start + 1], command_start);
         execv(path, &tokens[command_start]);
+        return;
       } 
       else 
-      { // Search these: /usr/local/bin, /usr/bin, /bin
-        char* possiblePaths[] = {"/usr/local/bin/", "/usr/bin/", "/bin/", NULL};
+      {
         char full_path[1024];
         
-        for(int i=0; possiblePaths[i]; i++){
-          snprintf(full_path, sizeof(full_path), "%s%s", possiblePaths[i], path);
+        for(int i = 0; i < 3; i++){
+          snprintf(full_path, sizeof(full_path), "%s%s", searchPaths[i], path);
           if(access(full_path, X_OK) == 0){
             execv(full_path, &tokens[command_start]);
+            return;
           }
         }
       }
       perror("execv failed");
-      exit(1);
+      exit(EXIT_FAILURE);
     } 
     else if(pid > 0){
-      //meaning that we r in the parent process
+      //meaning that we are in the parent process
       int status;
       waitpid(pid, &status, 0);
       last_command_status = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
@@ -337,17 +414,18 @@ Split the command into two parts: the command before the pipe (ls) and the comma
       perror("fork");
       last_command_status = 1;
     }
-
   }
 }
   
 void processAndPipe(char* cmd1, char* cmd2) {
-  /*Use the pipe() system call to create a pipe.
-  Use fork() to create two child processes:
-  The first process writes its output to the pipe.
-  The second process reads its input from the pipe.
-  Use dup2() to redirect the standard output of the first process to the write end of the pipe and the standard input of the second process to the read end of the pipe.
-  Close the pipe file descriptors in the parent process after setting up the redirection.*/
+
+  // Use the pipe() system call to create a pipe.
+  // Use fork() to create two child processes:
+  // The first process writes its output to the pipe.
+  // The second process reads its input from the pipe.
+  // Use dup2() to redirect the standard output of the first process to the write end of the pipe and the standard input of the second process to the read end of the pipe.
+  // Close the pipe file descriptors in the parent process after setting up the redirection
+
   int pipefd[2];
   int child1, child2;
 
@@ -436,4 +514,12 @@ void readTokens(TokenArray* tokens){    // for testing
     printf("%d : %s\n", i, tokens->tokens[i]);
   }
   printf("\n");
+}
+
+void freeTokenArray(TokenArray* tokens){
+  for (int i = 0; i < tokens->tokenCount; i++){
+    free(tokens->tokens[i]);
+  }
+  free(tokens->tokens);
+  free(tokens);
 }
