@@ -4,8 +4,9 @@ pwd
 ./helloworld test
 cat < input.txt
 cat < foo*baz.txt
-# cat *.txt
+cat foo*baz.txt | grep txt
 
-ls -l  .. > output.txt
-# exit
+# ls -l  .. > output.txt
+echo 100
+# # exit
 die exit1 exit2

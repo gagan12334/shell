@@ -104,7 +104,7 @@ int main(int argc, char** argv){
 	return EXIT_SUCCESS;
 }
 
-bool match(char* entry, char* pattern){
+bool match(char* entry, char* pattern){           // check if file matches wildcard
   char* wildCardLocation = strchr(pattern, '*');
 
   int firstSegLength = wildCardLocation - pattern;              // first segment is from the beginning of the string to before the *
@@ -144,8 +144,6 @@ TokenArray* tokenizer(char* line) {
       foundComment = true;
     }
 
-
-
     if (strlen(currentTok) != 0) {
 
       if (strchr(currentTok, '*')){                     // wildcard expansion
@@ -179,7 +177,6 @@ TokenArray* tokenizer(char* line) {
         count++;
         tokenArr = (char**)realloc(tokenArr, (count + 1) * sizeof(char*));
       }
-
     }
 
     if (foundComment){                                      // if comment found, break out and stop reading the line
@@ -225,33 +222,48 @@ void parser(char** tokens, int tokenCount) {
     if(last_command_status != 0){
       return;
     }
+    free(tokens[0]);
     tokens[0] = NULL; // Remove "and" if executing
   }
   else if(tokenCount > 0 && strcmp(tokens[0], "or") == 0) {
     if(last_command_status == 0){
       return;
-    } 
+    }
+    free(tokens[0]);
     tokens[0] = NULL; // Remove "or" if executing
   }
 
   // piping and redirection setup
   for(int i = 0; i < tokenCount; i++){
+    if (tokens[i] == NULL){
+      continue;
+    }
+
     if(strcmp(tokens[i], "<") == 0){
       in_file = tokens[i+1];
+
+      free(tokens[i]);
       tokens[i] = NULL;
     }
     else if(strcmp(tokens[i], "|") == 0){
       command1 = tokens[i-1];   // TODO: i = 0?
       command2 = tokens[i+1];
+
+      free(tokens[i]);
       tokens[i] = NULL;
     }
     else if(strcmp(tokens[i], ">") == 0){
       out_file = tokens[i+1];
+
+      free(tokens[i]);
       tokens[i] = NULL;
     }
   }
 
   for (int i = 0; i < tokenCount; i++){
+    if (tokens[i] == NULL){
+      continue;
+    }
 
     // die, exit, cd, pwd, which
     if(strcmp(tokens[i],"die") == 0){
@@ -509,17 +521,20 @@ char* nextLine(){
   }
 }
 
+void freeTokenArray(TokenArray* tokens){
+  for (int i = 0; i < tokens->tokenCount; i++){
+    if (tokens->tokens[i] != NULL){
+      free(tokens->tokens[i]);
+    }
+  }
+  free(tokens->tokens);
+  free(tokens);
+}
+
 void readTokens(TokenArray* tokens){    // for testing
+  printf("Token Count: %d\n", tokens->tokenCount);
   for (int i = 0; i < tokens->tokenCount; i++){
     printf("%d : %s\n", i, tokens->tokens[i]);
   }
   printf("\n");
-}
-
-void freeTokenArray(TokenArray* tokens){
-  for (int i = 0; i < tokens->tokenCount; i++){
-    free(tokens->tokens[i]);
-  }
-  free(tokens->tokens);
-  free(tokens);
 }
