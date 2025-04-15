@@ -17,15 +17,6 @@ static int last_command_status = 0; // Tracks last command's exit status (0 = su
 
 char* searchPaths[] = {"/usr/local/bin/", "/usr/bin/", "/bin/"};
 
-typedef struct {    // TODO: remove
-  char *argv[MAX_ARGS]; // argument list
-  char *input_file;
-  char *output_file;
-  bool is_builtin;
-  bool has_pipe;
-  struct Command *pipe_to;
-} Command;
-
 typedef struct {
   char** tokens;
   int tokenCount;
@@ -34,7 +25,7 @@ typedef struct {
 bool match(char* entry, char* pattern); 
 TokenArray* tokenizer(char* line);
 void parser();
-void processAndPipe();
+void processAndPipe(char** cmd1Address, char** cmd2Address, char* inFile, char* outFile);
 void freeTokenArray(TokenArray* tokens);
 
 void readTokens(TokenArray* tokens);
@@ -246,7 +237,8 @@ void parser(char** tokens, int tokenCount) {
       tokens[i] = NULL;
     }
     else if(strcmp(tokens[i], "|") == 0){
-      command1 = tokens[i-1];   // TODO: i = 0?
+      pipeIndex = i;
+      command1 = tokens[i-1];   // TODO: remove?
       command2 = tokens[i+1];
 
       free(tokens[i]);
@@ -259,6 +251,8 @@ void parser(char** tokens, int tokenCount) {
       tokens[i] = NULL;
     }
   }
+
+
 
   for (int i = 0; i < tokenCount; i++){
     if (tokens[i] == NULL){
@@ -329,7 +323,7 @@ void parser(char** tokens, int tokenCount) {
         return;
       }
     }
-    break;
+    // break;
   }
 
   // Handle pipes
@@ -345,10 +339,12 @@ void parser(char** tokens, int tokenCount) {
     cmd2_start = pipeIndex+1;
     while(cmd2_start < tokenCount && tokens[cmd2_start] == NULL){
       cmd2_start++;
-    }  
+    }
+
+    
     if(cmd1_start < pipeIndex && cmd2_start < tokenCount){
       int status;
-      processAndPipe(&tokens[cmd1_start], &tokens[cmd2_start]);
+      processAndPipe(&tokens[cmd1_start], &tokens[cmd2_start], in_file, out_file);
       waitpid(-1, &status, 0);
       last_command_status = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
     } 
@@ -429,8 +425,7 @@ void parser(char** tokens, int tokenCount) {
   }
 }
   
-void processAndPipe(char* cmd1, char* cmd2) {
-
+void processAndPipe(char** cmd1Address, char** cmd2Address, char* inFile, char* outFile) {
   // Use the pipe() system call to create a pipe.
   // Use fork() to create two child processes:
   // The first process writes its output to the pipe.
@@ -452,15 +447,49 @@ void processAndPipe(char* cmd1, char* cmd2) {
   }
 
   if(child1 == 0){
-    //this means we r in the actual child process and not the parent one
-    char* args1[] = {cmd1, NULL};
-    close(pipefd[0]); //close the unused read end of the pipe we made
+    //this means we are in the actual child process and not the parent one
+
+    close(pipefd[0]);   //close the unused read end of the pipe we made
     dup2(pipefd[1], STDOUT_FILENO);
     close(pipefd[1]);
 
-    execv(cmd1, args1);
-    perror("Error executing command");
-    exit(1);
+    
+    if(inFile != NULL){
+      int fd = open(inFile, O_RDONLY);
+      if(fd == -1){
+        perror("Error opening input file");
+        exit(1);
+      }
+      dup2(fd, STDIN_FILENO);
+      close(fd);
+    }
+
+    bool cmd1Done = false;
+    if(strchr(*cmd1Address, '/')) { // If it contains a slash, then just do it directly
+      execv(*cmd1Address, cmd1Address);
+      cmd1Done = true;
+    } 
+    else 
+    {
+      char full_path[1024];
+      
+      for(int i = 0; i < 3; i++){
+        snprintf(full_path, sizeof(full_path), "%s%s", searchPaths[i], *cmd1Address);
+
+        // printf("CMD1 | Path: %s Args: %s %s %s\n", full_path, cmd1Address[0], cmd1Address[1], cmd1Address[2]);
+
+        if(access(full_path, X_OK) == 0){
+          execv(full_path, cmd1Address);
+          cmd1Done = true;
+          break;
+        }
+      }
+    }
+
+    if (!cmd1Done){
+      perror("Error executing command 1");
+      exit(1);
+    }
   }
 
   if((child2 = fork()) == -1){ 
@@ -469,14 +498,46 @@ void processAndPipe(char* cmd1, char* cmd2) {
   }
 
   if(child2 == 0){
-    char* args2[] = {cmd2, NULL};
     close(pipefd[1]); 
     dup2(pipefd[0], STDIN_FILENO);
     close(pipefd[0]);
-  
-    execv(cmd2, args2);  
-    perror("Error executing command");
-    exit(1);
+
+    if(outFile != NULL){
+      int fd = open(outFile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+      if(fd == -1){
+        perror("Error opening output file");
+        exit(1);
+      }
+      dup2(fd, STDOUT_FILENO);
+      close(fd);
+    }
+
+    bool cmd2Done = false;
+    if(strchr(*cmd2Address, '/')) { // If it contains a slash, then just do it directly
+      execv(*cmd2Address, cmd2Address);
+      cmd2Done = true;
+    } 
+    else 
+    {
+      char full_path[1024];
+      
+      for(int i = 0; i < 3; i++){
+        snprintf(full_path, sizeof(full_path), "%s%s", searchPaths[i], *cmd2Address);
+
+        // printf("CMD2 | Path: %s Args: %s %s %s\n", full_path, cmd2Address[0], cmd2Address[1], cmd2Address[2]);
+
+        if(access(full_path, X_OK) == 0){
+          execv(full_path, cmd2Address);
+          cmd2Done = true;
+          break;
+        }
+      }
+    }
+
+    if (!cmd2Done){
+      perror("Error executing command 1");
+      exit(1);
+    }
   }
   //The parent process now basically closes both ends of the pipe
   close(pipefd[0]);

@@ -1,6 +1,2 @@
-total 45
-drwxr-x--- 3 as4314 as4314   11 Mar 10 02:38 P1
--rw-r----- 1 as4314 as4314 6410 Feb 26 13:23 p1.tar
-drwxr-x--- 4 as4314 as4314    9 Mar 24 23:55 P2
--rw-r----- 1 as4314 as4314 4647 Mar 24 23:55 p2.tar
-drwxr-x--- 4 as4314 as4314   19 Apr 14 22:56 P3
+txt ikqwjekqwme
+txt123123 abc

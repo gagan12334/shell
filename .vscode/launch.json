@@ -5,7 +5,7 @@
             "type": "cppdbg",
             "request": "launch",
             "program": "${fileDirname}/${fileBasenameNoExtension}",
-            "args": [],
+            "args": ["script3.sh"],
             "stopAtEntry": false,
             "cwd": "${fileDirname}",
             "environment": [],

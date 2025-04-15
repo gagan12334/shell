@@ -1,0 +1,1 @@
+cat < input.txt | grep txt > output.txt
