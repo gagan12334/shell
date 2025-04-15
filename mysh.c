@@ -370,9 +370,9 @@ void parser(char** tokens, int tokenCount) {
     pid_t pid;
     if((pid = fork()) == 0){
 
-      if(!isatty(STDIN_FILENO)) { // this checks if we are in batch mode
-        close(STDIN_FILENO);
-      }
+      // if(!isatty(STDIN_FILENO)) { // this checks if we are in batch mode
+      //   close(STDIN_FILENO);
+      // }
 
       if(in_file != NULL){
         int fd = open(in_file, O_RDONLY);
@@ -496,6 +496,13 @@ char* nextLine(){
     if (currentPos == currentLen){
       int bytes = read(currentFD, buffer, BUFLEN);
       if (bytes <= 0){
+        
+          if (line){                              // return last line at the end of a file if it doesn't have a '\n'
+            line = realloc(line, lineLen + 1);
+            line[lineLen] = '\0';
+            return line;
+          }
+
         return NULL;
       }
       currentLen = bytes;
