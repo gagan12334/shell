@@ -1,12 +1,11 @@
-echo hello # this is a comment
+pwd # this is a comment
+# full line comment
 which cat
-pwd
 ./helloworld test
 cat < input.txt
-cat < foo*baz.txt
+ls -l  .. > output1.txt
 cat foo*baz.txt | grep txt
-
-# ls -l  .. > output.txt
-echo 100
-# # exit
+cat < input.txt | grep txt > output2.txt
+cd ../
+pwd
 die exit1 exit2
